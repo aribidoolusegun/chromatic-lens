@@ -27,6 +27,7 @@
 
 ---
 
+Preview: https://segun-chromatic-lens.netlify.app/ 
 The page is rendered to an off-screen target, then one fragment pass bends it through a dome-shaped height field. Every spectral sample refracts with its own index of refraction, so the rim resolves white light into a thin-film spectrum — amber, gold, emerald, cyan, electric blue — the way a soap bubble does.
 
 - **Physically-motivated optics** — dome height field → surface normal → `refract()` per wavelength, with per-channel normalisation so white stays white.
