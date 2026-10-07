@@ -1,0 +1,394 @@
+<!doctype html>
+<!--
+  Chromatic Loupe — demo for src/chromatic-lens.js (see examples/ for DOM + CDN usage).
+
+  The page builds an editorial "content scene" (typography on a 2D canvas + three live shader
+  plates) and hands it to `new ChromaticLens({ targetElement, scene, camera, … })`, which renders
+  it into an FBO and refracts it through the lens pass. Leva drives `lens.set()`.
+
+  The page itself is monochrome on purpose: every colour on the type comes from the lens.
+  Type: Cormorant Garamond for display + reading copy, JetBrains Mono only for telemetry tags.
+  Exposed on window as `lens` for console experiments (lens.set({...}), lens.destroy()).
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Chromatic Loupe</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;1,400;1,500&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root { color-scheme: dark; --bg: #09090b; --muted: #8a8893; }
+  html, body { margin: 0; height: 100%; background: var(--bg); overflow: hidden; }
+  #stage { position: fixed; inset: 0; }
+  .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .fallback { position: fixed; inset: 0; display: grid; place-items: center; padding: 24px;
+    color: var(--muted); font: 13px/1.6 "JetBrains Mono", ui-monospace, monospace; text-align: center; }
+</style>
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.186.1/build/three.module.js" } }
+</script>
+</head>
+<body>
+<main class="sr-only">
+  <h1>Refractive Loupe</h1>
+  <p>An interactive WebGL lens that magnifies the page beneath the pointer and splits light into a thin-film spectrum at its rim. Move the pointer to steer it, scroll to resize, press to pulse.</p>
+</main>
+<div id="stage"></div>
+<script>
+  // Browsers refuse to import local ES modules from file:// — the module below would fail silently.
+  if (location.protocol === 'file:') {
+    document.body.insertAdjacentHTML('beforeend',
+      '<div class="fallback">This demo has to be served over http, not opened as a file.<br><br>' +
+      'From the project folder run <code>npx serve .</code><br>then open http://localhost:3000/chromatic-loupe/</div>');
+  }
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { ChromaticLens, THIN_FILM_GLSL } from './src/chromatic-lens.js';
+
+const coarsePointer = matchMedia('(pointer: coarse)').matches;
+const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const clamp = (v, a, b) => Math.min(Math.max(v, a), b);
+
+/* ------------------------------------------------------------------ *
+ * Content scene — orthographic, CSS px, y down (objects sit at -y).
+ * Custom materials write linear colour and end with colorspace_fragment.
+ * ------------------------------------------------------------------ */
+function createEditorial() {
+  const scene = new THREE.Scene();
+  const camera = new THREE.OrthographicCamera(0, 1, 0, -1, -10, 10);
+  const quad = new THREE.PlaneGeometry(1, 1);
+  const basicVert = /* glsl */`
+    varying vec2 vUv;
+    void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }
+  `;
+
+  // Typography layer: a 2D canvas the size of the drawing buffer.
+  const typeCanvas = document.createElement('canvas');
+  const ctx = typeCanvas.getContext('2d');
+  const typeTex = new THREE.CanvasTexture(typeCanvas);
+  typeTex.colorSpace = THREE.SRGBColorSpace;
+  typeTex.minFilter = THREE.LinearFilter;
+  typeTex.generateMipmaps = false;
+  const typePlane = new THREE.Mesh(quad, new THREE.ShaderMaterial({
+    uniforms: { map: { value: typeTex }, uBg: { value: new THREE.Color('#09090b') }, uReveal: { value: 0 } },
+    vertexShader: basicVert,
+    fragmentShader: /* glsl */`
+      uniform sampler2D map; uniform vec3 uBg; uniform float uReveal; varying vec2 vUv;
+      void main() {
+        gl_FragColor = vec4(mix(uBg, texture2D(map, vUv).rgb, uReveal), 1.0);
+        #include <colorspace_fragment>
+      }
+    `,
+    depthTest: false, depthWrite: false,
+  }));
+  scene.add(typePlane);
+
+  // Three live plates, so the FBO visibly carries motion.
+  const cardMat = (kind) => new THREE.ShaderMaterial({
+    uniforms: { uTime: { value: 0 }, uSize: { value: new THREE.Vector2(1, 1) }, uKind: { value: kind } },
+    vertexShader: basicVert,
+    fragmentShader: /* glsl */`
+      uniform float uTime; uniform vec2 uSize; uniform float uKind; varying vec2 vUv;
+      ${THIN_FILM_GLSL}
+      float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+      float noise(vec2 p) {
+        vec2 i = floor(p), f = fract(p), u = f * f * (3.0 - 2.0 * f);
+        return mix(mix(hash(i), hash(i + vec2(1, 0)), u.x), mix(hash(i + vec2(0, 1)), hash(i + vec2(1, 1)), u.x), u.y);
+      }
+      float fbm(vec2 p) { float v = 0.0, a = 0.5; for (int i = 0; i < 5; i++) { v += a * noise(p); p *= 2.03; a *= 0.5; } return v; }
+      float sdRoundBox(vec2 p, vec2 b, float r) { vec2 q = abs(p) - b + r; return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r; }
+
+      void main() {
+        vec2 px = (vUv - 0.5) * uSize;            // CSS px, centred
+        float d = sdRoundBox(px, uSize * 0.5, 6.0);
+        float alpha = 1.0 - smoothstep(-0.75, 0.75, d);
+        vec2 p = px / uSize.y;                    // aspect-correct, height = 1
+        vec3 col = vec3(0.012, 0.012, 0.016);     // authored in display space
+
+        if (uKind < 0.5) {
+          // Spectral arc — the rim of a very large bubble drifting past.
+          vec2 c = vec2(0.55 + 0.06 * sin(uTime * 0.2), -0.85 + 0.04 * cos(uTime * 0.17));
+          float e = length(p - c) - 1.15;
+          float t = clamp((0.04 - e) / 0.34, 0.0, 1.0);
+          float band = smoothstep(0.07, -0.01, e) * smoothstep(-0.5, -0.18, e);
+          col += thinFilm(t) * band * 0.95;
+          col += vec3(0.03, 0.04, 0.09) * smoothstep(-0.1, -0.9, e);
+        } else if (uKind < 1.5) {
+          // Ring field — fine monochrome lines, the best read for refraction.
+          float r = length(p - vec2(-0.25 + 0.05 * sin(uTime * 0.3), 0.15)) * 34.0 - uTime * 0.25;
+          float q = abs(fract(r + 0.5) - 0.5);
+          float line = 1.0 - smoothstep(0.0, fwidth(r) * 1.25, q - 0.03);
+          float g = abs(fract(p.x * 10.0 + 0.5) - 0.5);
+          float grid = 1.0 - smoothstep(0.0, fwidth(p.x * 10.0) * 1.25, g - 0.01);
+          col += vec3(0.86, 0.85, 0.82) * line * 0.75 + vec3(0.25) * grid * 0.25;
+        } else {
+          // Thin film — domain-warped noise through the interference palette.
+          vec2 q = p * 1.6;
+          q += 0.4 * vec2(fbm(q + uTime * 0.05), fbm(q + 3.1 - uTime * 0.04));
+          float f = fbm(q * 1.3);
+          col += thinFilmCycle(f * 1.7 + 0.2) * smoothstep(0.38, 0.78, f) * 0.85;
+        }
+        col += 0.08 * (1.0 - smoothstep(0.0, 1.0, abs(d + 0.5)));   // hairline border
+        gl_FragColor = vec4(pow(col, vec3(2.2)), alpha);
+        #include <colorspace_fragment>
+      }
+    `,
+    transparent: true, depthTest: false, depthWrite: false,
+  });
+  const cards = [0, 1, 2].map((k) => {
+    const m = new THREE.Mesh(quad, cardMat(k));
+    m.renderOrder = 1;
+    scene.add(m);
+    return m;
+  });
+
+  // --- Layout + typography ---------------------------------------------------------------
+  const INK = '#f2f0ea', MUTED = '#8a8893', FAINT = '#5d5b66';
+  const BODY = '#a3a1ab';
+  const SERIF = '"Cormorant Garamond", "Times New Roman", serif';
+  const MONO = '"JetBrains Mono", ui-monospace, Menlo, monospace';
+  let W = 1, H = 1, BW = 1, BH = 1, L;
+  let fontsReady = false, reveal = 0;   // nothing is drawn until the webfonts are in
+
+  function computeLayout() {
+    const m = Math.round(clamp(W * 0.04, 18, 56));
+    const compact = W < 760;
+    const cols = compact ? 2 : 3;
+    const gap = compact ? 12 : 20;
+    const cardW = (W - m * 2 - gap * (cols - 1)) / cols;
+    const cardH = clamp(H * 0.24, 110, 280);
+    const footerY = H - m;
+    const cardsTop = footerY - 34 - 26 - cardH;
+    const fs = clamp(Math.min(W * 0.112, H * 0.165), 50, 180);   // Cormorant runs small on the x-height
+    return { m, compact, cols, gap, cardW, cardH, footerY, cardsTop, fs, headTop: m + 64, rulerY: cardsTop - 40 };
+  }
+
+  function wrap(str, maxW) {
+    const lines = [];
+    let line = '';
+    for (const w of str.split(' ')) {
+      const test = line ? line + ' ' + w : w;
+      if (ctx.measureText(test).width > maxW && line) { lines.push(line); line = w; } else line = test;
+    }
+    if (line) lines.push(line);
+    return lines;
+  }
+
+  function text(str, x, y, font, color, align = 'left', tracking = '0px') {
+    ctx.font = font; ctx.fillStyle = color; ctx.textAlign = align;
+    if ('letterSpacing' in ctx) ctx.letterSpacing = tracking;
+    ctx.fillText(str, x, y);
+    if ('letterSpacing' in ctx) ctx.letterSpacing = '0px';
+  }
+
+  function drawType() {
+    const { m } = L;
+    typeCanvas.width = BW; typeCanvas.height = BH;
+    ctx.setTransform(BW / W, 0, 0, BH / H, 0, 0);
+    ctx.textBaseline = 'alphabetic';
+    ctx.fillStyle = '#09090b'; ctx.fillRect(0, 0, W, H);
+
+    // 12-column hairline grid — straight lines make refraction legible.
+    ctx.strokeStyle = 'rgba(255,255,255,0.05)'; ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let i = 0; i <= 12; i++) { const x = Math.round(m + (i * (W - 2 * m)) / 12) + 0.5; ctx.moveTo(x, 0); ctx.lineTo(x, H); }
+    for (const y of [m + 30, L.footerY - 22]) { ctx.moveTo(0, Math.round(y) + 0.5); ctx.lineTo(W, Math.round(y) + 0.5); }
+    ctx.stroke();
+
+    text('REFRACTIVE LOUPE', m, m + 12, `500 11px ${MONO}`, INK, 'left', '2.6px');
+    if (!L.compact) text('Design with love by Segun', m + (W - 2 * m) * 0.5, m + 13, `italic 400 15px ${SERIF}`, BODY);
+
+    const { fs, headTop } = L;
+    // Specimen-plate display: upright medium over a long italic, both tracked in tight.
+    text('Light, bent', m - fs * 0.035, headTop + fs * 0.8, `500 ${fs}px ${SERIF}`, INK, 'left', `${-0.022 * fs}px`);
+    text('into color.', m + fs * 0.02, headTop + fs * 1.6, `italic 400 ${fs}px ${SERIF}`, INK, 'left', `${-0.012 * fs}px`);
+
+    const bodyFont = `400 18px ${SERIF}`, lineH = 25;
+    ctx.font = bodyFont;
+    const bodyTop = headTop + fs * 1.6 + 46;
+    // Fit whole sentences only — never cut the copy mid-thought.
+    const sentences = [
+      'A screen-space loupe.',
+      'The page is rendered to an off-screen target, then a single fragment pass bends it through a dome-shaped height field.',
+      'Every wavelength refracts with its own index, so the rim splits white type into a thin-film spectrum \u2014 the same physics as a soap bubble.',
+      'The page itself carries no color at all.',
+    ];
+    const maxLines = Math.max(0, Math.floor((L.rulerY - 34 - bodyTop) / lineH) + 1);
+    const maxW = Math.min(430, W - 2 * m);
+    let lines = [];
+    for (let n = sentences.length; n > 0; n--) {
+      lines = wrap(sentences.slice(0, n).join(' '), maxW);
+      if (lines.length <= maxLines) break;
+      lines = [];
+    }
+    lines.forEach((ln, i) => text(ln, m, bodyTop + i * lineH, bodyFont, BODY));
+
+    // Wavelength ruler, 380–750 nm.
+    const x0 = m, x1 = W - m, y = L.rulerY;
+    ctx.strokeStyle = 'rgba(242,240,234,0.55)'; ctx.beginPath();
+    ctx.moveTo(x0, y + 0.5); ctx.lineTo(x1, y + 0.5);
+    for (let nm = 380; nm <= 750; nm += L.compact ? 10 : 5) {
+      const x = Math.round(x0 + ((nm - 380) / 370) * (x1 - x0)) + 0.5;
+      const major = nm % 50 === 0;
+      ctx.moveTo(x, y); ctx.lineTo(x, y - (major ? 9 : 4));
+      if (major) text(String(nm), x, y + 16, `400 10px ${MONO}`, FAINT, 'center');
+    }
+    ctx.stroke();
+    text('λ / nm', x1, y - 14, `400 10px ${MONO}`, FAINT, 'right', '1px');
+
+    const captions = [['FIG. 01', 'Spectral arc'], ['FIG. 02', 'Ring field'], ['FIG. 03', 'Thin film']];
+    for (let i = 0; i < L.cols; i++) {
+      const cx = m + i * (L.cardW + L.gap), cy = L.cardsTop + L.cardH + 20;
+      text(captions[i][0], cx, cy, `500 10.5px ${MONO}`, INK, 'left', '1.4px');
+      text(captions[i][1], cx + 66, cy + 1, `italic 400 15px ${SERIF}`, BODY);
+      if (!L.compact) text('live · glsl', cx + L.cardW, cy, `400 10.5px ${MONO}`, FAINT, 'right');
+    }
+
+    // Narrow screens: the masthead credit slot sits under the control panel, so sign the footer instead.
+    if (L.compact) text('Design with love by Segun', m, L.footerY + 1, `italic 400 15px ${SERIF}`, BODY);
+    else text('scene → fbo → dome refraction → spectral resolve', m, L.footerY, `400 10.5px ${MONO}`, MUTED, 'left', '0.6px');
+    text(coarsePointer ? 'drag to move the lens' : 'move · scroll to resize · press to pulse',
+      W - m, L.footerY, `400 10.5px ${MONO}`, MUTED, 'right', '0.6px');
+
+    typeTex.dispose();          // canvas size may have changed — force a fresh GPU texture
+    typeTex.needsUpdate = true;
+  }
+
+  return {
+    scene, camera,
+    resize({ width, height, bufferWidth, bufferHeight }) {
+      W = width; H = height; BW = bufferWidth; BH = bufferHeight;
+      camera.right = W; camera.bottom = -H; camera.updateProjectionMatrix();
+      typePlane.scale.set(W, H, 1); typePlane.position.set(W / 2, -H / 2, 0);
+      L = computeLayout();
+      cards.forEach((c, i) => {
+        c.visible = i < L.cols;
+        c.scale.set(L.cardW, L.cardH, 1);
+        c.position.set(L.m + i * (L.cardW + L.gap) + L.cardW / 2, -(L.cardsTop + L.cardH / 2), 0);
+        c.material.uniforms.uSize.value.set(L.cardW, L.cardH);
+      });
+      if (fontsReady) drawType();
+    },
+    update(t, dt) {
+      for (const c of cards) c.material.uniforms.uTime.value = reduceMotion ? 0 : t;
+      if (fontsReady && reveal < 1) {
+        reveal = reduceMotion ? 1 : Math.min(1, reveal + dt / 0.7);
+        typePlane.material.uniforms.uReveal.value = 1 - Math.pow(1 - reveal, 3);   // ease-out
+      }
+    },
+    fontsLoaded() { fontsReady = true; if (L) drawType(); },
+  };
+}
+
+/* ------------------------------------------------------------------ *
+ * Mount the lens.
+ * ------------------------------------------------------------------ */
+const editorial = createEditorial();
+let lens, setControl = null;
+try {
+  lens = new ChromaticLens({
+    targetElement: document.getElementById('stage'),
+    radius: 170,
+    dispersion: 0.4,
+    wheelResize: true,
+    scene: editorial.scene,
+    camera: editorial.camera,
+    onResize: editorial.resize,
+    onFrame: editorial.update,
+    onParamsChange: (changed) => setControl?.(changed),   // keep Leva in sync with wheel-resize
+  });
+  window.lens = lens;
+} catch (err) {
+  document.body.insertAdjacentHTML('beforeend',
+    '<div class="fallback">This prototype needs WebGL2.<br>The lens can’t run in this browser.</div>');
+  throw err;
+}
+
+// Canvas text never triggers webfont loads by itself, and document.fonts.ready resolves as soon
+// as nothing is *pending* — so request every face the canvas uses, then wait for ready.
+// The type is drawn once, after that (3 s cap so an offline load still shows fallback text).
+const FONT_FACES = [
+  `500 64px "Cormorant Garamond"`, `italic 400 64px "Cormorant Garamond"`,
+  `400 18px "Cormorant Garamond"`, `500 12px "JetBrains Mono"`, `400 12px "JetBrains Mono"`,
+];
+const fontsLoaded = document.fonts.ready
+  .then(() => Promise.all(FONT_FACES.map((f) => document.fonts.load(f))))
+  .then(() => document.fonts.ready);
+Promise.race([fontsLoaded, new Promise((r) => setTimeout(r, 3000))])
+  .catch(() => {})
+  .finally(editorial.fontsLoaded);
+
+/* ------------------------------------------------------------------ *
+ * Leva controls — loaded lazily; the lens runs on defaults if this fails.
+ * ------------------------------------------------------------------ */
+(async () => {
+  try {
+    const [React, ReactDOM, { useControls, folder, Leva }] = await Promise.all([
+      import('https://esm.sh/react@18.3.1'),
+      import('https://esm.sh/react-dom@18.3.1/client?deps=react@18.3.1'),
+      import('https://esm.sh/leva@0.9.35?deps=react@18.3.1,react-dom@18.3.1'),
+    ]);
+    const h = React.createElement;
+    const P = lens.params;
+    const n = (value, min, max, step, label) => ({ value, min, max, step, ...(label && { label }) });
+
+    function Bridge() {
+      const [values, set] = useControls(() => ({
+        Lens: folder({
+          radius: n(P.radius, 40, 420, 1),
+          refraction: n(P.refraction, 0, 2, 0.01),
+          ior: n(P.ior, 1, 2.4, 0.01, 'IOR'),
+          profile: n(P.profile, 0.2, 1.5, 0.01, 'dome profile'),
+        }),
+        Dispersion: folder({
+          dispersion: n(P.dispersion, 0, 1.5, 0.01, 'spread'),
+          falloff: n(P.falloff, 0, 6, 0.05, 'rim falloff'),
+          contrast: n(P.contrast, 0.5, 4, 0.05, 'palette contrast'),
+          samples: n(P.samples, 3, 32, 1),
+        }),
+        Surface: folder({
+          edgeGlow: n(P.edgeGlow, 0, 2, 0.01, 'edge glow'),
+          film: n(P.film, 0, 3, 0.01, 'film thickness'),
+          fresnel: n(P.fresnel, 0, 2, 0.01),
+          highlight: n(P.highlight, 0, 1, 0.01),
+        }),
+        Physics: folder({
+          stiffness: n(P.stiffness, 20, 600, 1),
+          damping: n(P.damping, 2, 60, 0.5),
+          pinch: n(P.pinch, 0, 2, 0.01),
+          jiggle: n(P.jiggle, 0, 1, 0.01),
+        }, { collapsed: true }),
+      }));
+      React.useEffect(() => { lens.set(values); }, [values]);
+      React.useEffect(() => { setControl = set; }, [set]);
+      return null;
+    }
+
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    ReactDOM.createRoot(host).render(h(React.Fragment, null,
+      h(Leva, {
+        collapsed: innerWidth < 760,
+        titleBar: { title: 'Loupe' },
+        theme: {
+          colors: {
+            elevation1: '#0b0b0e', elevation2: '#121216', elevation3: '#1c1c22',
+            accent1: '#2f7cff', accent2: '#4f95ff', accent3: '#8fbcff',
+            highlight1: '#5d5b66', highlight2: '#a3a1ab', highlight3: '#f2f0ea',
+          },
+          fonts: { mono: '"JetBrains Mono", ui-monospace, monospace', sans: '"JetBrains Mono", ui-monospace, monospace' },
+          radii: { xs: '2px', sm: '3px', lg: '8px' },
+        },
+      }),
+      h(Bridge)));
+  } catch (err) {
+    console.warn('[loupe] Leva failed to load — running with default parameters.', err);
+  }
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,42 @@
+<!doctype html>
+<!-- Script-tag build (Three.js bundled). After `npm run build`, serve the repo root and open /examples/cdn.html.
+     From a CDN: <script src="https://cdn.jsdelivr.net/npm/chromatic-lens/dist/chromatic-lens.min.js"></script> -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lens Script Tag</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; height: 100%; background: #09090b; }
+  #stage { position: fixed; inset: 0; }
+  .note { position: fixed; left: 16px; bottom: 16px; z-index: 2; color: #a3a1ab; font: 12px/1.5 ui-monospace, Menlo, monospace; }
+</style>
+</head>
+<body>
+<div id="stage"></div>
+<div class="note">window.ChromaticLens from dist/chromatic-lens.min.js · texture source</div>
+
+<script src="../dist/chromatic-lens.min.js"></script>
+<script>
+  // Any image, canvas, video or URL works as a source. Here: a generated specimen plate.
+  const plate = document.createElement('canvas');
+  plate.width = 1600; plate.height = 1000;
+  const g = plate.getContext('2d');
+  g.fillStyle = '#09090b'; g.fillRect(0, 0, 1600, 1000);
+  g.strokeStyle = 'rgba(242,240,234,.12)';
+  for (let x = 0; x <= 1600; x += 40) { g.beginPath(); g.moveTo(x + .5, 0); g.lineTo(x + .5, 1000); g.stroke(); }
+  g.fillStyle = '#f2f0ea'; g.font = 'italic 220px Georgia, serif'; g.fillText('Prism', 120, 560);
+  g.font = '28px Menlo, monospace'; g.fillStyle = '#8a8893'; g.fillText('380 nm ——————————————— 750 nm', 130, 660);
+
+  const lens = new ChromaticLens({
+    targetElement: document.getElementById('stage'),
+    texture: plate,
+    radius: 180,
+    dispersion: 0.5,
+    wheelResize: true,
+  });
+  window.lens = lens;
+</script>
+</body>
+</html>

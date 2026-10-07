@@ -1,0 +1,68 @@
+{
+  "name": "chromatic-lens",
+  "version": "0.1.0",
+  "description": "A refractive WebGL loupe with thin-film chromatic dispersion for images, Three.js scenes and live DOM.",
+  "type": "module",
+  "main": "./dist/chromatic-lens.cjs",
+  "module": "./dist/chromatic-lens.mjs",
+  "types": "./types/index.d.ts",
+  "unpkg": "./dist/chromatic-lens.min.js",
+  "jsdelivr": "./dist/chromatic-lens.min.js",
+  "exports": {
+    ".": {
+      "types": "./types/index.d.ts",
+      "import": "./dist/chromatic-lens.mjs",
+      "require": "./dist/chromatic-lens.cjs"
+    },
+    "./min": "./dist/chromatic-lens.min.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "!dist/*.min.js.map",
+    "src",
+    "types",
+    "README.md",
+    "LICENSE"
+  ],
+  "sideEffects": [
+    "./src/iife.js",
+    "./dist/chromatic-lens.min.js"
+  ],
+  "scripts": {
+    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
+    "build": "npm run clean && tsup",
+    "dev": "tsup --watch",
+    "serve": "serve -l 3000 .",
+    "prepublishOnly": "npm run build",
+    "typecheck": "tsc --noEmit --strict --module esnext --moduleResolution bundler --lib dom,es2020 --target es2020 types/index.d.ts"
+  },
+  "peerDependencies": {
+    "three": ">=0.160.0"
+  },
+  "devDependencies": {
+    "@types/three": "^0.186.0",
+    "serve": "^14.2.4",
+    "three": "^0.186.1",
+    "tsup": "^8.5.1",
+    "typescript": "^5.9.3"
+  },
+  "keywords": [
+    "webgl",
+    "three",
+    "threejs",
+    "shader",
+    "glsl",
+    "lens",
+    "loupe",
+    "magnifier",
+    "refraction",
+    "chromatic-aberration",
+    "dispersion",
+    "iridescent",
+    "thin-film",
+    "creative-coding"
+  ],
+  "author": "Olusegun Aribido",
+  "license": "MIT"
+}

@@ -1,0 +1,76 @@
+<!doctype html>
+<!-- ChromaticLens over live DOM: bindToElement() + overlay mode. Serve the repo root and open /examples/dom.html -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Lens Over DOM</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,500;1,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root { color-scheme: dark; --bg: #0b0b0d; --ink: #f2f0ea; --muted: #a3a1ab; --faint: #5d5b66; --line: rgba(255,255,255,.08); }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--ink); }
+  body { font: 18px/1.5 "Cormorant Garamond", Georgia, serif; }
+  .hero { min-height: 100vh; padding: clamp(20px, 5vw, 64px); display: grid; align-content: space-between; gap: 40px; }
+  .tag { font: 500 11px/1 "JetBrains Mono", ui-monospace, monospace; letter-spacing: .22em; text-transform: uppercase; color: var(--muted); }
+  .bar { display: flex; justify-content: space-between; gap: 16px; border-bottom: 1px solid var(--line); padding-bottom: 14px; }
+  h1 { margin: 0; font-weight: 500; font-size: clamp(54px, 11vw, 168px); line-height: .9; letter-spacing: -.02em; }
+  h1 em { font-weight: 400; letter-spacing: -.012em; }
+  p { max-width: 34em; color: var(--muted); margin: 18px 0 0; }
+  .plates { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 16px; }
+  .plate { aspect-ratio: 4 / 3; border-radius: 6px; border: 1px solid var(--line); }
+  figure:nth-child(1) .plate { background: radial-gradient(120% 90% at 80% 110%, transparent 52%, #ffb347 56%, #c9e86b 60%, #3fe0a8 64%, #2fc6f0 68%, #2f5cff 72%, transparent 78%), #060608; }
+  figure:nth-child(2) .plate { background: repeating-radial-gradient(circle at 35% 40%, #e8e6e0 0 1.2px, transparent 1.2px 9px), #060608; }
+  figure:nth-child(3) .plate { background: conic-gradient(from 200deg at 60% 50%, #06070a, #1d3b8f, #2fc6f0, #3fe0a8, #ffb347, #06070a); }
+  figcaption { margin-top: 8px; font: 400 10.5px "JetBrains Mono", monospace; letter-spacing: .12em; color: var(--faint); }
+  .actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+  button, a.btn { font: 500 12px "JetBrains Mono", monospace; letter-spacing: .08em; color: var(--ink); background: #16161b;
+    border: 1px solid var(--line); border-radius: 999px; padding: 10px 16px; cursor: pointer; text-decoration: none; }
+  button:hover, a.btn:hover { border-color: rgba(255,255,255,.3); }
+  button:focus-visible, a.btn:focus-visible { outline: 2px solid #4f95ff; outline-offset: 2px; }
+</style>
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.186.1/build/three.module.js" } }
+</script>
+</head>
+<body>
+<section class="hero" id="hero">
+  <div class="bar"><span class="tag">Chromatic Lens · DOM capture</span><span class="tag">Design with love by Segun</span></div>
+  <div>
+    <h1>On the <em>dispersion</em><br>of light.</h1>
+    <p>This is ordinary HTML. The lens rasterises it through an SVG foreignObject, refracts it on the GPU
+       and stays transparent everywhere else — so the text remains selectable and the buttons below still work.</p>
+  </div>
+  <div class="plates">
+    <figure style="margin:0"><div class="plate"></div><figcaption>FIG. 01 — ARC</figcaption></figure>
+    <figure style="margin:0"><div class="plate"></div><figcaption>FIG. 02 — RINGS</figcaption></figure>
+    <figure style="margin:0"><div class="plate"></div><figcaption>FIG. 03 — FILM</figcaption></figure>
+  </div>
+  <div class="actions">
+    <button id="count" type="button">Clicked 0 times</button>
+    <button id="toggle" type="button">Hide lens</button>
+    <a class="btn" href="../index.html">← Canvas demo</a>
+  </div>
+</section>
+
+<script type="module">
+import { ChromaticLens } from '../src/index.js';
+
+const hero = document.getElementById('hero');
+const make = () => new ChromaticLens({ targetElement: hero, element: hero, radius: 150, cursor: false });
+let lens = ChromaticLens.isSupported() ? make() : null;
+window.lens = lens;
+
+// DOM mutations trigger a debounced re-capture, so the lens always shows current content.
+let n = 0;
+document.getElementById('count').addEventListener('click', (e) => { e.currentTarget.textContent = `Clicked ${++n} time${n === 1 ? '' : 's'}`; });
+document.getElementById('toggle').addEventListener('click', (e) => {
+  if (lens) { lens.destroy(); lens = null; e.currentTarget.textContent = 'Show lens'; }
+  else { lens = make(); e.currentTarget.textContent = 'Hide lens'; }
+  window.lens = lens;
+});
+</script>
+</body>
+</html>
