@@ -64,5 +64,13 @@
     "creative-coding"
   ],
   "author": "Olusegun Aribido",
-  "license": "MIT"
+  "license": "MIT",
+  "homepage": "https://github.com/aribidoolusegun/chromatic-lens#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aribidoolusegun/chromatic-lens.git"
+  },
+  "bugs": {
+    "url": "https://github.com/aribidoolusegun/chromatic-lens/issues"
+  }
 }
